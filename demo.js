@@ -7,6 +7,9 @@
 // It answers the API from a recording of a local node and keeps every
 // market moving with made-up trades around the recorded book. It refuses
 // orders and the faucet with the code `demo`: nothing leaves the page.
+// Withdrawals are answered by `demo-withdraw.js`, which plays the relay.
+
+import { coinsOf, withdrawReply } from "./demo-withdraw.js";
 
 /** @typedef {{ t: number, o: number, h: number, l: number, c: number, v: number }} Bar */
 /** @typedef {{ seq: number, price: number, lots: number, side: "buy" | "sell", time: number }} Print */
@@ -34,6 +37,10 @@
  * @property {number} interval
  * @property {number} clock time of the last made block
  * @property {Record<string, unknown>[]} balances what a demo account holds
+ * @property {import("./demo-withdraw.js").Ledger["initial"]} initial the same, per coin
+ * @property {import("./demo-withdraw.js").Ledger["free"]} free per account, per coin
+ * @property {import("./demo-withdraw.js").Ledger["transfers"]} transfers per account
+ * @property {import("./demo-withdraw.js").Ledger["prepared"]} prepared withdrawals not yet submitted
  */
 /** @typedef {{ status: number, body: Record<string, unknown> }} Reply */
 
@@ -167,6 +174,10 @@ async function load(file) {
   const timeShift = now - recordedAt;
   const barShift = Math.floor(timeShift / HOUR_MS) * HOUR_MS;
   const faucet = obj(info.faucet);
+  const balances = arr(faucet.coins).map((item) => {
+    const coin = obj(item);
+    return { asset: int(coin.asset), free: String(int(coin.amount)), locked: "0" };
+  });
   return {
     info,
     markets: arr(seed.markets).map((m) => market(m, barShift, timeShift)),
@@ -174,10 +185,11 @@ async function load(file) {
     root: typeof seed.state_root === "string" ? seed.state_root : "",
     interval: Math.max(50, int(info.interval_ms)),
     clock: now,
-    balances: arr(faucet.coins).map((item) => {
-      const coin = obj(item);
-      return { asset: int(coin.asset), free: String(int(coin.amount)), locked: "0" };
-    }),
+    balances,
+    initial: new Map(balances.map((b) => [b.asset, BigInt(b.free)])),
+    free: new Map(),
+    transfers: new Map(),
+    prepared: new Map(),
   };
 }
 
@@ -275,6 +287,17 @@ function refuse(status, code, message) {
 }
 
 /**
+ * What an account holds now: the start, less what it has withdrawn.
+ * @param {Demo} demo
+ * @param {string} account
+ * @returns {Record<string, unknown>[]}
+ */
+function balancesOf(demo, account) {
+  const coins = coinsOf(demo, account);
+  return demo.balances.map((b) => ({ ...b, free: String(coins.get(Number(b.asset)) ?? 0n) }));
+}
+
+/**
  * @param {Demo} demo
  * @param {URLSearchParams} query
  * @returns {Reply}
@@ -317,7 +340,15 @@ function snapshot(demo, query) {
       account:
         account === null
           ? null
-          : { funded: true, balances: demo.balances, orders: [], fills: [], reports: [], transfers: [], faucet_wait: 0 },
+          : {
+              funded: true,
+              balances: balancesOf(demo, account),
+              orders: [],
+              fills: [],
+              reports: [],
+              transfers: demo.transfers.get(account) ?? [],
+              faucet_wait: 0,
+            },
     },
   };
 }
@@ -334,6 +365,10 @@ export async function reply(file, path, body) {
   const demo = await loading;
   advance(demo);
   const url = new URL(path, "https://demo.invalid");
+  const withdrawal = await withdrawReply(demo, url.pathname, body, Date.now());
+  if (withdrawal !== null) {
+    return withdrawal;
+  }
   if (body !== undefined) {
     return refuse(403, "demo", REFUSAL);
   }

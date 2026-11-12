@@ -2,10 +2,16 @@
 // The terminal: asks the node for the exchange's state after every block,
 // draws it, and turns the order form into signed transactions.
 
-import { ApiError, askFaucet, getInfo, getSnapshot, sendTx } from "./api.js";
+import { ApiError, appFetch, askFaucet, getInfo, getSnapshot, isDemo, sendTx } from "./api.js";
+import { offerDemoWallet } from "./demo-wallet.js";
 import { drawChart } from "./chart.js";
+import * as agent from "./agent.js";
+import { mountBridge, explainEvm } from "./bridge.js";
+import { mountWithdraw } from "./withdraw-panel.js";
+import { closeModal, modalOpen, pickerShown, showMenu, showPicker, wireModal } from "./connect.js";
+import { EvmError, discover, firstAddress, knownAddress, requestAddress } from "./evm.js";
 import * as keys from "./keys.js";
-import { NETWORKS, switchTo } from "./networks.js";
+import { NETWORKS, bridgeOf, switchTo } from "./networks.js";
 import * as pairs from "./pairs.js";
 import { createPicker, recall, remember } from "./picker.js";
 import { randomNonce, signTx, toHex } from "./tx.js";
@@ -60,6 +66,10 @@ const state = {
   wallet: null,
   /** Whether the wallet was asked if it already knows this page. */
   restored: false,
+  /** The EVM wallet connected, if any. @type {{ wallet: import("./evm.js").EvmWallet, address: string } | null} */
+  evm: null,
+  /** The person chose an EVM wallet or a key: the Tint wallet is not taken up on its own. */
+  declined: false,
   /** @type {Side} */
   side: "buy",
   /** @type {"limit" | "market"} */
@@ -104,7 +114,15 @@ const REASONS = {
   not_fillable: "В стакане нет встречных заявок по такой цене.",
   too_many_orders: "Слишком много открытых заявок. Снимите часть.",
   nothing_to_change: "Снимать нечего.",
-  unfunded: "На счёте пусто. Сначала получите тестовые монеты.",
+  unfunded: "На счёте биржи пусто. Сначала пополните его.",
+  not_active: "Биржа в этой сети ещё не запущена.",
+  no_exchange: "В этой сети нет биржи.",
+  malformed: "Узел не разобрал заявку. Обновите страницу.",
+  too_large: "Заявка слишком большая.",
+  cannot_fit: "Узел не принял заявку: очередь блока полна. Попробуйте через блок.",
+  node_unreachable: "Шлюз не достучался до узла сети.",
+  bad_node_reply: "Узел сети ответил непонятно. Попробуйте позже.",
+  node_error: "Узел сети отказал. Попробуйте позже.",
   expired: "Заявка устарела, пока шла. Отправьте ещё раз.",
   lifetime_too_long: "Узел не принял срок действия заявки.",
   bad_deadman_deadline: "Узел не принял срок автоотмены заявок.",
@@ -141,6 +159,9 @@ const WALLET_REASONS = {
 function explain(error) {
   if (error instanceof walletLink.WalletError) {
     return WALLET_REASONS[error.code] ?? WALLET_REASONS.failed ?? "";
+  }
+  if (error instanceof EvmError) {
+    return explainEvm(error);
   }
   if (error instanceof ApiError) {
     if (error.code === "faucet_wait" && error.blocks !== null) {
@@ -206,7 +227,24 @@ function draft() {
   return { lots, ticks, free, cost, problem };
 }
 
-/** Where the person is on the way to a first order. */
+/** Whether the network gives test coins. */
+function hasFaucet() {
+  return (state.info?.faucet.length ?? 0) > 0;
+}
+
+/** The account to fund, said so that it can be copied into a wallet. */
+function fundingNote() {
+  const hex = state.account?.hex ?? "";
+  if (state.account?.source === "evm") {
+    return `Пополните счёт из кошелька через блок «Пополнить из кошелька» (когда мост запущен) или переводом из кошелька Tint: ${hex}`;
+  }
+  return `Переведите монеты на этот счёт биржи из кошелька Tint: ${hex}`;
+}
+
+/**
+ * Where the person is on the way to a first order.
+ * @returns {"account" | "coins" | "trade"}
+ */
 function stage() {
   if (state.account === null) {
     return "account";
@@ -238,11 +276,15 @@ function renderForm() {
   setText(
     submit,
     now === "account"
-      ? state.wallet === null
-        ? "Создать счёт"
-        : "Подключить кошелёк"
+      ? state.evm !== null
+        ? "Включить торговлю"
+        : state.wallet === null
+          ? "Подключить"
+          : "Подключить кошелёк"
       : now === "coins"
-        ? "Получить тестовые монеты"
+        ? hasFaucet()
+          ? "Получить тестовые монеты"
+          : "Как пополнить счёт"
         : `${side === "buy" ? "Купить" : "Продать"} ${market.base.symbol}`,
   );
 
@@ -284,7 +326,9 @@ function render() {
   picker.update(info, snap.markets, market);
   renderMarket(market, snap);
   renderRows();
-  renderWallet(info, market, state.account, snap.account, state.wallet !== null);
+  renderWallet(info, market, state.account, snap.account, state.wallet !== null, state.evm?.address ?? null);
+  redrawBridge();
+  redrawWithdraw();
   renderActivity(info, market, snap.account, state.tab);
   renderProof(snap);
   renderForm();
@@ -536,7 +580,13 @@ async function connectWallet() {
 
 /** The first step: an account from the wallet, or one made here. */
 async function openAccount() {
-  await (state.wallet === null ? createAccount() : connectWallet());
+  if (state.evm !== null) {
+    await enableTrading();
+  } else if (state.wallet !== null) {
+    await connectWallet();
+  } else {
+    await openPicker();
+  }
 }
 
 /**
@@ -544,7 +594,7 @@ async function openAccount() {
  * account then replaces one kept in this browser, which stays untouched.
  */
 function adoptWallet() {
-  if (state.wallet !== null) {
+  if (state.wallet !== null || state.declined || state.evm !== null) {
     return;
   }
   const found = walletLink.provider();
@@ -567,7 +617,12 @@ async function createAccount() {
   try {
     state.account = await keys.create();
     forgetReports();
-    say("Счёт создан. Его ключ хранится в этом браузере. Теперь получите тестовые монеты.", "good");
+    say(
+      hasFaucet()
+        ? "Счёт создан. Его ключ хранится в этом браузере. Теперь получите тестовые монеты."
+        : `Счёт создан. Его ключ хранится в этом браузере. ${fundingNote()}`,
+      "good",
+    );
   } catch {
     say("Этот браузер не умеет подписывать заявки. Обновите его или откройте страницу в другом.", "bad");
   } finally {
@@ -575,6 +630,327 @@ async function createAccount() {
   }
   void poll();
 }
+
+/** Where the browser remembers the EVM wallet last connected. */
+const EVM_KEY = "dex.evm";
+
+/**
+ * @param {string} id
+ * @param {string} address
+ */
+function rememberEvm(id, address) {
+  try {
+    localStorage.setItem(EVM_KEY, JSON.stringify({ id, address }));
+  } catch {
+    // A browser that keeps nothing asks again next time.
+  }
+}
+
+function forgetEvm() {
+  try {
+    localStorage.removeItem(EVM_KEY);
+  } catch {
+    // Nothing was kept.
+  }
+}
+
+/** @returns {{ id: string, address: string } | null} */
+function recallEvm() {
+  try {
+    const raw = localStorage.getItem(EVM_KEY);
+    const value = raw === null ? null : /** @type {{ id?: unknown, address?: unknown }} */ (JSON.parse(raw));
+    if (value !== null && typeof value.id === "string" && typeof value.address === "string") {
+      return { id: value.id, address: value.address };
+    }
+  } catch {
+    // Unreadable: treat as nothing remembered.
+  }
+  return null;
+}
+
+/** @type {{ provider: import("./evm.js").EvmProvider, accounts: (list: unknown) => void, chain: () => void } | null} */
+let evmListeners = null;
+
+/** Stops listening to the EVM wallet. */
+function detachEvm() {
+  if (evmListeners !== null) {
+    evmListeners.provider.removeListener?.("accountsChanged", evmListeners.accounts);
+    evmListeners.provider.removeListener?.("chainChanged", evmListeners.chain);
+    evmListeners = null;
+  }
+}
+
+/** Listens for the person switching or disconnecting the account in the wallet. */
+function attachEvm() {
+  detachEvm();
+  const evm = state.evm;
+  if (evm === null || evm.wallet.provider.on === undefined) {
+    return;
+  }
+  const provider = evm.wallet.provider;
+  /** @param {unknown} list */
+  const accounts = (list) => {
+    const address = firstAddress(list);
+    if (address === null) {
+      leaveEvm();
+      say("Кошелёк отключён от страницы.", "plain");
+    } else if (state.evm !== null && address !== state.evm.address) {
+      void useAddress(address);
+    }
+  };
+  // The deposit panel reads the wallet's network when it sends, so a
+  // change only needs a redraw.
+  const chain = () => void poll();
+  provider.on("accountsChanged", accounts);
+  provider.on("chainChanged", chain);
+  evmListeners = { provider, accounts, chain };
+}
+
+/** Lets go of the EVM wallet and forgets that it was chosen. The trading key stays in the browser. */
+function leaveEvm() {
+  detachEvm();
+  forgetEvm();
+  if (state.evm !== null) {
+    state.evm = null;
+    state.account = null;
+    forgetReports();
+  }
+  void poll();
+}
+
+/**
+ * The wallet now shows another address: the trading key kept for it, if
+ * there is one, becomes the account.
+ * @param {string} address
+ */
+async function useAddress(address) {
+  const evm = state.evm;
+  if (evm === null) {
+    return;
+  }
+  evm.address = address;
+  state.account = null;
+  forgetReports();
+  rememberEvm(evm.wallet.id, address);
+  try {
+    const kept = await agent.load(address);
+    if (state.evm !== null && state.evm.address === address) {
+      state.account = kept;
+    }
+  } catch {
+    // No store in this browser: trading has to be enabled again.
+  }
+  void poll();
+}
+
+/**
+ * Connects an EVM wallet the person picked.
+ * @param {import("./evm.js").EvmWallet} wallet
+ */
+async function connectEvm(wallet) {
+  if (state.busy) {
+    return;
+  }
+  closeModal();
+  state.busy = true;
+  renderForm();
+  say("Подтвердите подключение в кошельке…", "plain");
+  try {
+    const address = await requestAddress(wallet.provider);
+    detachEvm();
+    state.wallet = null;
+    state.declined = true;
+    state.evm = { wallet, address };
+    attachEvm();
+    await useAddress(address);
+    say(
+      state.account === null
+        ? "Кошелёк подключён. Теперь включите торговлю."
+        : "Кошелёк подключён, торговый ключ найден в этом браузере.",
+      "good",
+    );
+  } catch (error) {
+    say(explain(error), "bad");
+  } finally {
+    state.busy = false;
+  }
+  void poll();
+}
+
+/** The first step with an EVM wallet: a signed message makes the trading key. */
+async function enableTrading() {
+  const { evm, info } = state;
+  if (evm === null || info === null || state.busy) {
+    return;
+  }
+  const address = evm.address;
+  state.busy = true;
+  renderForm();
+  say("Подтвердите подпись в кошельке. Подпись запросим два раза подряд: так проверяем, что счёт можно будет восстановить.", "plain");
+  try {
+    const account = await agent.enable(evm.wallet.provider, address, info.chainId);
+    if (state.evm === null || state.evm.address !== address) {
+      return;
+    }
+    state.account = account;
+    forgetReports();
+    say("Торговля включена. Торговый ключ хранится в этом браузере и может только торговать и переводить монеты этого счёта биржи.", "good");
+  } catch (error) {
+    if (error instanceof agent.UnstableSignatureError) {
+      say(
+        "Этот кошелёк подписывает каждый раз по-разному, поэтому тот же счёт нельзя будет восстановить на другом устройстве. Выберите «Ключ в этом браузере».",
+        "bad",
+      );
+    } else if (error instanceof EvmError) {
+      say(explain(error), "bad");
+    } else {
+      say("Не получилось сохранить ключ в этом браузере.", "bad");
+    }
+  } finally {
+    state.busy = false;
+  }
+  void poll();
+}
+
+/**
+ * The wallets to offer: those the browser has, and on a demo copy with
+ * none, the pretend one.
+ * @returns {Promise<import("./evm.js").EvmWallet[]>}
+ */
+async function findWallets() {
+  /** @type {Storage | null} */
+  let storage = null;
+  try {
+    storage = window.localStorage;
+  } catch {
+    // No storage: the demo wallet lasts until the page is closed.
+  }
+  return offerDemoWallet(await discover(window), isDemo(), storage);
+}
+
+/** Brings back the EVM wallet connected last time, without asking the person. */
+async function restoreEvm() {
+  const remembered = recallEvm();
+  if (remembered === null) {
+    return false;
+  }
+  const wallet = (await findWallets()).find((w) => w.id === remembered.id);
+  if (wallet === undefined) {
+    return false;
+  }
+  const address = await knownAddress(wallet.provider);
+  if (address === null) {
+    forgetEvm();
+    return false;
+  }
+  state.evm = { wallet, address };
+  state.declined = true;
+  attachEvm();
+  await useAddress(address);
+  return true;
+}
+
+/** The "connect" window: every wallet the browser has, the Tint wallet, a key. */
+async function openPicker() {
+  const common = {
+    tintWallet: walletLink.provider() !== null,
+    key: keys.available(),
+    onEvm: (/** @type {import("./evm.js").EvmWallet} */ wallet) => void connectEvm(wallet),
+    onTint: () => {
+      closeModal();
+      leaveEvm();
+      state.declined = false;
+      adoptWallet();
+      void connectWallet();
+    },
+    onKey: () => void useKey(),
+  };
+  showPicker({ wallets: null, ...common });
+  const wallets = await findWallets();
+  if (modalOpen() && pickerShown()) {
+    showPicker({ wallets, ...common });
+  }
+}
+
+/** The account kept in this browser, or a new one if there is none. */
+async function useKey() {
+  closeModal();
+  leaveEvm();
+  state.wallet = null;
+  state.declined = true;
+  try {
+    const kept = await keys.load();
+    if (kept === null) {
+      await createAccount();
+      return;
+    }
+    state.account = kept;
+    forgetReports();
+    say("Ключ из этого браузера подключён.", "good");
+  } catch {
+    say("Этот браузер не умеет подписывать заявки. Обновите его или откройте страницу в другом.", "bad");
+  }
+  void poll();
+}
+
+/** The account menu behind the header's pill. */
+function openMenu() {
+  const evm = state.evm;
+  showMenu({
+    address: evm?.address ?? null,
+    account: state.account?.hex ?? null,
+    canForget: state.account?.source === "evm",
+    onCopy: () => {
+      const hex = state.account?.hex ?? "";
+      navigator.clipboard.writeText(hex).then(
+        () => say("Номер счёта скопирован.", "plain"),
+        () => say(`Ваш счёт: ${hex}`, "plain"),
+      );
+      closeModal();
+    },
+    onSwitch: () => void openPicker(),
+    onDisconnect: () => {
+      closeModal();
+      leaveEvm();
+      say("Кошелёк отключён. Торговый ключ остался в этом браузере.", "plain");
+    },
+    onForget: () => {
+      const address = state.evm?.address;
+      closeModal();
+      if (address === undefined) {
+        return;
+      }
+      agent.forget(address).then(
+        () => {
+          state.account = null;
+          forgetReports();
+          say("Торговый ключ забыт. Включите торговлю снова, и тот же счёт вернётся.", "plain");
+          void poll();
+        },
+        () => say("Не получилось забыть ключ.", "bad"),
+      );
+    },
+  });
+}
+
+const redrawBridge = mountBridge({
+  provider: () => state.evm?.wallet.provider ?? null,
+  owner: () => state.evm?.address ?? null,
+  account: () => (state.account?.source === "evm" ? state.account.publicKey : null),
+  networks: () => bridgeOf(NETWORKS, state.info?.network ?? "test"),
+});
+
+const redrawWithdraw = mountWithdraw({
+  fetch: appFetch,
+  demo: isDemo(),
+  info: () => state.info,
+  height: () => state.snap?.height ?? null,
+  account: () => state.account,
+  owner: () => state.evm?.address ?? null,
+  free: (asset) => state.snap?.account?.balances.get(asset)?.free ?? 0n,
+  networkName: (chainId) =>
+    bridgeOf(NETWORKS, state.info?.network ?? "test").find((n) => n.chainId === chainId)?.name ?? null,
+});
 
 /** Asks the node's faucet for test coins. */
 async function takeCoins() {
@@ -603,7 +979,11 @@ async function submit() {
     return;
   }
   if (now === "coins") {
-    await takeCoins();
+    if (hasFaucet()) {
+      await takeCoins();
+    } else {
+      say(fundingNote(), "good");
+    }
     return;
   }
   const market = state.market;
@@ -770,16 +1150,13 @@ function wire() {
   });
 
   byId("deposit").addEventListener("click", () => void takeCoins());
+  wireModal();
   byId("account").addEventListener("click", () => {
-    const account = state.account;
-    if (account === null) {
-      void openAccount();
-      return;
+    if (state.account === null && state.evm === null) {
+      void openPicker();
+    } else {
+      openMenu();
     }
-    navigator.clipboard.writeText(account.hex).then(
-      () => say("Номер счёта скопирован.", "plain"),
-      () => say(`Ваш счёт: ${account.hex}`, "plain"),
-    );
   });
 
   window.addEventListener(walletLink.READY_EVENT, () => {
@@ -829,10 +1206,12 @@ async function start() {
   adoptWallet();
   if (state.wallet === null) {
     try {
-      const kept = await keys.load();
-      // The wallet may have announced itself meanwhile.
-      if (state.wallet === null) {
-        state.account = kept;
+      if (!(await restoreEvm())) {
+        const kept = await keys.load();
+        // The wallet may have announced itself meanwhile.
+        if (state.wallet === null && state.evm === null) {
+          state.account = kept;
+        }
       }
     } catch {
       // A browser that keeps no store still shows the market.

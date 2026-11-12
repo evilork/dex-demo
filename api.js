@@ -159,6 +159,42 @@ async function call(path, body) {
 }
 
 /**
+ * Whether this page is a demo copy, which has no node.
+ * @returns {boolean}
+ */
+export function isDemo() {
+  return demoSeed() !== null;
+}
+
+/**
+ * `fetch` for the terminal's own API, demo-aware: on a demo copy the call
+ * is answered by demo.js (which plays the node and the withdrawal relay),
+ * otherwise it goes out as it is. The answer has the parts of a Response
+ * the withdrawal flow reads.
+ * @param {string} path
+ * @param {RequestInit} init
+ * @returns {Promise<{ status: number, json: () => Promise<unknown> }>}
+ */
+export async function appFetch(path, init) {
+  const demo = demoSeed();
+  if (demo === null) {
+    return fetch(path, init);
+  }
+  /** @type {unknown} */
+  let body;
+  if (init.method === "POST") {
+    try {
+      body = typeof init.body === "string" ? JSON.parse(init.body) : {};
+    } catch {
+      body = null;
+    }
+  }
+  const { reply } = await import("./demo.js");
+  const answer = await reply(demo, path, body);
+  return { status: answer.status, json: async () => answer.body };
+}
+
+/**
  * The demo recording's file name when the page is a demo copy, else null.
  * Only demo/make.py writes the line this looks for.
  * @returns {string | null}

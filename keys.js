@@ -32,15 +32,58 @@ function open() {
 }
 
 /**
+ * What is kept under a name in the browser's store.
+ * @param {string} slot
+ * @returns {Promise<unknown>}
+ */
+export async function readSlot(slot) {
+  const db = await open();
+  try {
+    return await settled(db.transaction(STORE, "readonly").objectStore(STORE).get(slot));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * @param {string} slot
+ * @param {unknown} value
+ * @returns {Promise<void>}
+ */
+export async function writeSlot(slot, value) {
+  const db = await open();
+  try {
+    await settled(db.transaction(STORE, "readwrite").objectStore(STORE).put(value, slot));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * @param {string} slot
+ * @returns {Promise<void>}
+ */
+export async function removeSlot(slot) {
+  const db = await open();
+  try {
+    await settled(db.transaction(STORE, "readwrite").objectStore(STORE).delete(slot));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * The account a kept key makes.
  * @param {CryptoKey} privateKey
  * @param {Uint8Array} publicKey
+ * @param {"browser" | "evm"} [source]
  * @returns {Account}
  */
-function account(privateKey, publicKey) {
+export function account(privateKey, publicKey, source = "browser") {
   return {
     publicKey,
     hex: toHex(publicKey),
-    source: "browser",
+    source,
     sign: async (id) => {
       const data = new Uint8Array(id);
       return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, privateKey, data));

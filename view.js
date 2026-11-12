@@ -3,6 +3,7 @@
 // place rather than rebuilt, so a click that starts on a row still lands
 // on it when a new block arrives in between.
 
+import { shortAddress } from "./evm.js";
 import { change, clock, formatPrice, formatQty, formatUnits, qtyDigits, shortHex } from "./units.js";
 
 /** Height of a row of the book and of the tape, as the style sheet sets it. */
@@ -56,10 +57,11 @@ export function buttonById(id) {
 }
 
 /**
- * @param {string} tag
+ * @template {keyof HTMLElementTagNameMap} K
+ * @param {K} tag
  * @param {string} [cls]
  * @param {string} [content]
- * @returns {HTMLElement}
+ * @returns {HTMLElementTagNameMap[K]}
  */
 export function el(tag, cls, content) {
   const node = document.createElement(tag);
@@ -337,8 +339,9 @@ function listed(items) {
  * @param {Account | null} account
  * @param {AccountView | null} view
  * @param {boolean} inWallet the page is open inside the wallet's browser
+ * @param {string | null} [evmAddress] the EVM wallet connected, if any
  */
-export function renderWallet(info, market, account, view, inWallet) {
+export function renderWallet(info, market, account, view, inWallet, evmAddress = null) {
   for (const [prefix, asset] of /** @type {[string, Asset][]} */ ([["base", market.base], ["quote", market.quote]])) {
     const balance = balanceOf(view, asset.id);
     setText(byId(`${prefix}-symbol`), asset.symbol);
@@ -349,6 +352,10 @@ export function renderWallet(info, market, account, view, inWallet) {
   const wait = view?.faucetWait ?? 0;
   const deposit = buttonById("deposit");
   deposit.disabled = account === null || wait > 0;
+  // A network without a faucet (a chain node behind the gateway): coins
+  // come onto the exchange from a Tint wallet, so there is no button.
+  const hasFaucet = info.faucet.length > 0;
+  deposit.classList.toggle("hidden", !hasFaucet);
   // Two coins by name, the rest in a word: a list of a dozen says nothing.
   const named = info.faucet.slice(0, 2).map(({ asset, amount }) => {
     const whole = amount % 10n ** BigInt(asset.decimals) === 0n;
@@ -359,22 +366,38 @@ export function renderWallet(info, market, account, view, inWallet) {
     const whole = amount % 10n ** BigInt(asset.decimals) === 0n;
     return `${formatUnits(amount, asset.decimals, whole ? 0 : 2)} ${asset.symbol}`;
   }));
-  let note = `Это тестовая сеть: «Пополнить» выдаёт ${gift}, они ничего не стоят.`;
-  if (account === null) {
+  let note = hasFaucet
+    ? `Это тестовая сеть: «Пополнить» выдаёт ${gift}, они ничего не стоят.`
+    : "Монеты попадают на счёт биржи переводом из кошелька Tint и уходят с неё так же.";
+  if (account === null && evmAddress !== null) {
+    note = "Кошелёк подключён. Нажмите «Включить торговлю» в форме заявки: кошелёк подпишет одно сообщение, и появится счёт биржи.";
+  } else if (account === null) {
     note = inWallet
       ? "Сначала подключите кошелёк: ключ счёта останется в нём, странице он не передаётся."
       : "Сначала создайте счёт: его ключ появится в этом браузере и никуда не уйдёт.";
-  } else if (wait > 0) {
+  } else if (hasFaucet && wait > 0) {
     note = `Тестовые монеты выданы. Ещё раз — через ${wait} бл.`;
   }
-  setText(byId("wallet-note"), `${note} Вывод появится, когда биржа подключится к сети.`);
+  if (account?.source === "evm") {
+    note = `${note} Торговый ключ хранится в этом браузере и может только торговать и переводить монеты этого счёта биржи. Вывести можно только в этот же кошелёк.`;
+  }
+  setText(byId("wallet-note"), hasFaucet && account?.source !== "evm" ? `${note} Вывод появится, когда биржа подключится к сети.` : note);
+  const canWithdraw = account?.source === "evm" && evmAddress !== null;
+  /** @type {HTMLButtonElement} */ (byId("withdraw")).disabled = !canWithdraw;
+  byId("withdraw").setAttribute(
+    "title",
+    canWithdraw ? "Вывести монеты в подключённый кошелёк" : "Вывод появится, когда биржа подключится к сети",
+  );
 
   const pill = byId("account");
-  byId("account-dot").classList.toggle("hidden", account === null);
-  const invite = inWallet ? "Подключить кошелёк" : "Создать счёт";
-  const name = account === null ? invite : shortHex(account.hex);
-  setText(byId("account-name"), account?.source === "wallet" ? `Кошелёк · ${name}` : name);
-  pill.title = account === null ? `${invite} для торговли` : `Ваш счёт: ${account.hex}. Нажмите, чтобы скопировать.`;
+  byId("account-dot").classList.toggle("hidden", account === null && evmAddress === null);
+  const name = account === null ? "Подключить" : shortHex(account.hex);
+  setText(
+    byId("account-name"),
+    evmAddress !== null ? shortAddress(evmAddress) : account?.source === "wallet" ? `Кошелёк · ${name}` : name,
+  );
+  pill.title =
+    account === null && evmAddress === null ? "Подключить кошелёк для торговли" : "Счёт, кошелёк и выход: нажмите, чтобы открыть меню";
 }
 
 /** @returns {HTMLElement} */

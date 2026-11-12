@@ -18,14 +18,20 @@
  * @property {string} label what the switch says
  * @property {string | null} url the network's terminal; null while the
  *   network is not running
+ * @property {readonly import("./evm.js").EvmNetwork[]} bridge the EVM
+ *   networks coins can be deposited from; empty while the bridge is not
+ *   launched
  */
 
 /** @type {readonly Network[]} */
 export const NETWORKS = Object.freeze([
-  Object.freeze({ id: /** @type {NetworkId} */ ("test"), label: "Тестовая", url: null }),
+  Object.freeze({ id: /** @type {NetworkId} */ ("test"), label: "Тестовая", url: null, bridge: Object.freeze([]) }),
+  // The bridge lists stay empty until a bridge contract is launched; an
+  // entry is `{ chainId, name, contract, confirmations, tokens: [{ symbol,
+  // address, decimals, asset }] }`, and it lives here, never from a node.
   // The main network is not running: there is no main Tint chain with the
   // exchange in it yet. Its address goes here once it is.
-  Object.freeze({ id: /** @type {NetworkId} */ ("main"), label: "Основная", url: null }),
+  Object.freeze({ id: /** @type {NetworkId} */ ("main"), label: "Основная", url: null, bridge: Object.freeze([]) }),
 ]);
 
 /**
@@ -79,4 +85,14 @@ export function safeUrl(value) {
     return null;
   }
   return url.href;
+}
+
+/**
+ * The EVM networks a deposit can come from on a Tint network.
+ * @param {readonly Network[]} networks
+ * @param {NetworkId} id
+ * @returns {readonly import("./evm.js").EvmNetwork[]}
+ */
+export function bridgeOf(networks, id) {
+  return networks.find((n) => n.id === id)?.bridge ?? [];
 }

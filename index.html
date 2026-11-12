@@ -21,7 +21,7 @@
     </div>
     <div class="bar-end">
       <span class="chip ground num" id="height" title="Номер последнего блока">блок —</span>
-      <button class="pill small light" id="account" type="button"><span class="dot hidden" id="account-dot"></span><span class="num" id="account-name">Создать счёт</span></button>
+      <button class="pill small light" id="account" type="button"><span class="dot hidden" id="account-dot"></span><span class="num" id="account-name">Подключить</span></button>
     </div>
   </header>
 
@@ -163,9 +163,11 @@
         </div>
         <div class="pair">
           <button class="pill small" id="deposit" type="button" disabled>Пополнить</button>
-          <button class="pill small light" type="button" disabled title="Вывод появится, когда биржа подключится к сети">Вывести</button>
+          <button class="pill small light" id="withdraw" type="button" disabled title="Вывод появится, когда биржа подключится к сети">Вывести</button>
         </div>
         <p class="sub note" id="wallet-note"></p>
+        <div class="bridge hidden" id="bridge"></div>
+        <div class="bridge hidden" id="withdraw-panel"></div>
       </section>
     </div>
 
@@ -175,6 +177,12 @@
     <span>Тестовая сеть на этом компьютере. Монеты ничего не стоят, вторая сторона сделок — программы. После перезапуска узла всё начинается заново. Заявки и сделки на бирже видны всем.</span>
     <span class="proof" title="Корень состояния биржи после последнего блока">блок <span class="num" id="proof-height">—</span> · корень <span class="num" id="proof-root">—</span></span>
   </footer>
+</div>
+<div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="sheet">
+    <div class="head"><h2 id="modal-title"></h2><button class="round tiny" id="modal-close" type="button" aria-label="Закрыть">✕</button></div>
+    <div id="modal-body"></div>
+  </div>
 </div>
 </body>
 </html>
