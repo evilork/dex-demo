@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="dex-demo" content="demo-seed.json">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Биржа</title>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="main.js"></script>
+</head>
+<body>
+<div class="page">
+
+  <header class="bar">
+    <div class="brand"><span class="logo" id="logo">&nbsp;</span><span class="section">Биржа</span><div class="netswitch" id="networks" role="group" aria-label="Сеть">
+        <button type="button" data-net="test" aria-pressed="true">Тестовая сеть</button>
+        <button type="button" data-net="main" aria-pressed="false">Основная сеть</button>
+      </div>
+      <span class="chip peach hidden" id="net">Нет связи с узлом</span>
+    </div>
+    <div class="bar-end">
+      <span class="chip ground num" id="height" title="Номер последнего блока">блок —</span>
+      <button class="pill small light" id="account" type="button"><span class="dot hidden" id="account-dot"></span><span class="num" id="account-name">Создать счёт</span></button>
+    </div>
+  </header>
+
+  <div class="netnote" role="note"><p>Демо без узла: цены и сделки выдуманные, заявки никуда не отправляются.</p></div>
+
+  <div class="netnote hidden" id="net-note" role="status">
+    <p id="net-note-text"></p>
+    <button class="pill small" id="net-note-close" type="button">Понятно</button>
+  </div>
+
+  <main class="grid">
+
+    <section class="tile strip" aria-label="Пара и цена">
+      <div class="picker" id="picker">
+        <button class="pair-button" id="pair" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="pairs" title="Выбрать пару">
+          <span class="badge" id="pair-badge"></span><span class="pair-name" id="pair-name">— / —</span><span class="caret" aria-hidden="true"></span>
+        </button>
+        <div class="pairs hidden" id="pairs" role="dialog" aria-label="Выбор пары">
+          <div class="box"><input id="pair-search" type="text" inputmode="search" enterkeyhint="go" placeholder="Найти пару: TINT, USD…" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="24" aria-label="Найти пару"></div>
+          <div class="tabs" id="pair-groups" role="group" aria-label="Какие пары показать"></div>
+          <div class="pair-row pair-top"><span></span><span>Пара</span><span>Цена</span><span>За сутки</span><span>Объём за сутки</span></div>
+          <div class="pair-list" id="pair-list"></div>
+          <p class="empty hidden" id="pair-empty">Таких пар нет.</p>
+          <p class="sub pair-foot">Пары тестового узла. ↑ ↓ и Enter — выбрать, Esc — закрыть, ★ — держать наверху.</p>
+        </div>
+      </div>
+      <div class="price">
+        <span class="big num" id="last">—</span>
+        <span class="unit" id="unit"></span>
+        <span class="chip ground" id="day-change">за сутки сделок не было</span>
+      </div>
+      <div class="stats">
+        <div class="stat"><span>Максимум за сутки</span><b class="num" id="day-high">—</b></div>
+        <div class="stat"><span>Минимум за сутки</span><b class="num" id="day-low">—</b></div>
+        <div class="stat"><span>Объём за сутки</span><b class="num" id="day-volume">—</b></div>
+      </div>
+    </section>
+
+    <section class="tile t-chart" aria-label="График цены">
+      <div class="head">
+        <div class="tabs" id="frames" role="group" aria-label="Шаг графика">
+          <button type="button" data-minutes="1" aria-pressed="false">1 мин</button>
+          <button type="button" data-minutes="5" aria-pressed="true">5 мин</button>
+          <button type="button" data-minutes="15" aria-pressed="false">15 мин</button>
+          <button type="button" data-minutes="60" aria-pressed="false">1 час</button>
+        </div>
+      </div>
+      <div class="fit"><svg class="chart" id="chart" role="img" aria-label="График цены"></svg></div>
+    </section>
+
+    <section class="tile t-book" aria-label="Стакан и сделки">
+      <div class="head">
+        <div class="tabs" id="book-tabs" role="group" aria-label="Что показать">
+          <button type="button" data-view="book" aria-pressed="true">Стакан</button>
+          <button type="button" data-view="tape" aria-pressed="false">Сделки</button>
+        </div>
+        <span class="chip ground num" id="step"></span>
+      </div>
+      <div class="pane" id="book-pane">
+        <div class="cols"><span id="book-price-head">Цена</span><span id="book-qty-head">Объём</span><span>Всего</span></div>
+        <div class="fit"><div class="rows bottom" id="asks"></div></div>
+        <div class="spread"><b class="num" id="mid">—</b><span class="sub">разница <span class="num" id="gap">—</span></span></div>
+        <div class="fit"><div class="rows" id="bids"></div></div>
+      </div>
+      <div class="pane hidden" id="tape-pane">
+        <div class="cols"><span id="tape-price-head">Цена</span><span id="tape-qty-head">Объём</span><span>Время</span></div>
+        <div class="fit"><div class="rows" id="tape"></div><p class="empty" id="tape-empty">Сделок пока не было.</p></div>
+      </div>
+    </section>
+
+    <section class="tile t-orders" aria-label="Мои заявки и сделки">
+      <div class="head">
+        <div class="tabs" id="tabs" role="group" aria-label="Что показать">
+          <button type="button" data-tab="orders" id="tab-orders" aria-pressed="true">Открытые заявки</button>
+          <button type="button" data-tab="fills" aria-pressed="false">Мои сделки</button>
+          <button type="button" data-tab="transfers" aria-pressed="false">Пополнения и выводы</button>
+        </div>
+        <button class="link hidden" id="cancel-all" type="button">Снять все</button>
+      </div>
+      <div class="order top" id="activity-head"><span></span><span></span><span></span><span class="bar-cell"></span><span></span></div>
+      <div class="fit flow">
+        <div class="rows scroll">
+          <div id="activity"></div>
+          <p class="empty" id="activity-empty">Заявки появятся здесь, когда у вас будет счёт.</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="side">
+      <section class="tile mint form t-form" id="form" aria-label="Новая заявка">
+        <form id="order-form" class="stack" autocomplete="off" novalidate>
+          <div class="seg" id="side" role="group" aria-label="Сторона">
+            <button type="button" data-side="buy" aria-pressed="true">Купить</button>
+            <button type="button" data-side="sell" aria-pressed="false">Продать</button>
+          </div>
+          <div class="seg thin" id="kind" role="group" aria-label="Вид заявки">
+            <button type="button" data-kind="limit" aria-pressed="true">По своей цене</button>
+            <button type="button" data-kind="market" aria-pressed="false">По рынку</button>
+          </div>
+          <div class="field" id="price-field">
+            <label for="price">Цена</label>
+            <div class="box"><input id="price" inputmode="decimal" autocomplete="off" maxlength="24"><span id="price-unit"></span></div>
+          </div>
+          <div class="field">
+            <label for="amount">Сколько</label>
+            <div class="box"><input id="amount" inputmode="decimal" autocomplete="off" maxlength="24"><span id="amount-unit"></span></div>
+          </div>
+          <div class="quarters" id="quarters" role="group" aria-label="Доля от доступного">
+            <button type="button" data-share="25">25 %</button>
+            <button type="button" data-share="50">50 %</button>
+            <button type="button" data-share="75">75 %</button>
+            <button type="button" data-share="100">Всё</button>
+          </div>
+          <button class="switch" id="post" type="button" role="switch" aria-checked="false">
+            <span>Только в стакан<small>не исполнится сразу, комиссии нет</small></span><i></i>
+          </button>
+          <div class="lines">
+            <div class="line"><span>Доступно</span><b class="num" id="avail">—</b></div>
+            <div class="line hidden" id="bound-line"><span>Цена не хуже</span><b class="num" id="bound">—</b></div>
+            <div class="line"><span>Сумма</span><b class="num" id="total">—</b></div>
+            <div class="line"><span>Комиссия</span><b class="num" id="fee">—</b></div>
+          </div>
+          <button class="pill" id="submit" type="submit" disabled>Ждём узел…</button>
+          <p class="notice" id="notice" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section class="tile lilac t-wallet" aria-label="Мои монеты на бирже">
+        <div class="head"><h2>На бирже</h2><span class="sub">свободно и в заявках</span></div>
+        <div class="coins">
+          <div class="coin">
+            <span class="name"><span class="badge" id="base-badge"></span><span id="base-symbol"></span></span>
+            <span class="two"><b class="num" id="base-free">—</b><small class="num" id="base-locked"></small></span>
+          </div>
+          <div class="coin">
+            <span class="name"><span class="badge" id="quote-badge"></span><span id="quote-symbol"></span></span>
+            <span class="two"><b class="num" id="quote-free">—</b><small class="num" id="quote-locked"></small></span>
+          </div>
+        </div>
+        <div class="pair">
+          <button class="pill small" id="deposit" type="button" disabled>Пополнить</button>
+          <button class="pill small light" type="button" disabled title="Вывод появится, когда биржа подключится к сети">Вывести</button>
+        </div>
+        <p class="sub note" id="wallet-note"></p>
+      </section>
+    </div>
+
+  </main>
+
+  <footer class="foot">
+    <span>Тестовая сеть на этом компьютере. Монеты ничего не стоят, вторая сторона сделок — программы. После перезапуска узла всё начинается заново. Заявки и сделки на бирже видны всем.</span>
+    <span class="proof" title="Корень состояния биржи после последнего блока">блок <span class="num" id="proof-height">—</span> · корень <span class="num" id="proof-root">—</span></span>
+  </footer>
+</div>
+</body>
+</html>
