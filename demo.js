@@ -6,7 +6,7 @@
 //
 // It answers the API from a recording of a local node and keeps every
 // market moving with made-up trades around the recorded book. It refuses
-// orders and the faucet with the code `demo`: nothing leaves the page.
+// orders with the code `demo`; the faucet adds coins on this page only.
 // Withdrawals are answered by `demo-withdraw.js`, which plays the relay.
 
 import { coinsOf, withdrawReply } from "./demo-withdraw.js";
@@ -51,7 +51,7 @@ const MAX_TRADES = 40;
 const MAX_BARS = 120;
 const TRADE_CHANCE = 0.35;
 const MOVE_CHANCE = 0.12;
-const REFUSAL = "Это демо без узла: заявки и тестовые монеты здесь не выдаются.";
+const REFUSAL = "Это демо без узла: заявки здесь не исполняются.";
 
 /** @type {Promise<Demo> | null} */
 let loading = null;
@@ -287,6 +287,25 @@ function refuse(status, code, message) {
 }
 
 /**
+ * The demo's faucet: adds the recorded faucet gift to the account, only
+ * on this page, so "Пополнить" shows what it does on a test network.
+ * @param {Demo} demo
+ * @param {unknown} body `{ account }`, 64 hex digits
+ * @returns {Reply}
+ */
+function faucet(demo, body) {
+  const account = body !== null && typeof body === "object" ? /** @type {Record<string, unknown>} */ (body).account : undefined;
+  if (typeof account !== "string" || !/^[0-9a-f]{64}$/.test(account)) {
+    return refuse(400, "bad_request", "account is 64 hex digits");
+  }
+  const coins = coinsOf(demo, account);
+  for (const [asset, gift] of demo.initial) {
+    coins.set(asset, (coins.get(asset) ?? 0n) + gift);
+  }
+  return { status: 200, body: { ok: true } };
+}
+
+/**
  * What an account holds now: the start, less what it has withdrawn.
  * @param {Demo} demo
  * @param {string} account
@@ -368,6 +387,9 @@ export async function reply(file, path, body) {
   const withdrawal = await withdrawReply(demo, url.pathname, body, Date.now());
   if (withdrawal !== null) {
     return withdrawal;
+  }
+  if (url.pathname === "/api/v1/faucet" && body !== undefined) {
+    return faucet(demo, body);
   }
   if (body !== undefined) {
     return refuse(403, "demo", REFUSAL);

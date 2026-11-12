@@ -64,18 +64,25 @@ export function mountWithdraw(host) {
     root?.replaceChildren(el("h3", "", "Вывести в кошелёк"), ...(host.demo ? [el("p", "", DEMO_NOTE)] : []), el("p", "", text));
   }
 
+  /** The panel opens under the coins, often below the screen's edge. */
+  function reveal() {
+    root?.scrollIntoView?.({ block: "nearest" });
+  }
+
   async function start() {
     note("Спрашиваем у моста, что можно вывести…");
+    reveal();
     try {
       const options = await flow.load();
       if (options.length === 0) {
         note("Вывод в кошелёк появится, когда мост будет запущен.");
-        return;
+      } else {
+        draw(options);
       }
-      draw(options);
     } catch (error) {
       note(explainWithdraw(error));
     }
+    reveal();
   }
 
   /** @param {import("./withdraw.js").NetworkChoice[]} options */

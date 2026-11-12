@@ -32,6 +32,7 @@ import {
   renderTape,
   renderWallet,
   say,
+  sayCoins,
   setText,
 } from "./view.js";
 
@@ -963,8 +964,10 @@ async function takeCoins() {
   try {
     await askFaucet(account.hex);
     say("Тестовые монеты придут со следующим блоком.", "good");
+    sayCoins("Тестовые монеты придут со следующим блоком.", "good");
   } catch (error) {
     say(explain(error), "bad");
+    sayCoins(explain(error), "bad");
   } finally {
     state.busy = false;
   }

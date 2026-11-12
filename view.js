@@ -552,3 +552,15 @@ export function say(content, tone) {
   line.className = tone === "plain" ? "notice" : `notice ${tone}`;
   setText(line, content);
 }
+
+/**
+ * The line under "Пополнить" and "Вывести" that says what a press did,
+ * right where the person pressed.
+ * @param {string} content
+ * @param {"plain" | "good" | "bad"} tone
+ */
+export function sayCoins(content, tone) {
+  const line = byId("coins-notice");
+  line.className = tone === "plain" ? "notice" : `notice ${tone}`;
+  setText(line, content);
+}
